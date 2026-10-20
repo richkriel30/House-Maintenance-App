@@ -420,13 +420,18 @@ async function viewTodo(seq) {
   bindCards(tasks);
 }
 
-function taskCard(t, urls, { tick = false, showAssignee = false } = {}) {
+function statusChip(t) {
+  if (t.is_done) return '<span class="chip done">Done</span>';
+  if (!t.is_active) return '<span class="chip">Inactive</span>';
   const due = relDue(t.due_date);
+  return `<span class="chip ${due.cls}">${esc(due.label)}</span>`;
+}
+
+function taskCard(t, urls, { tick = false, showAssignee = false } = {}) {
   const thumb = t.photos[0] && urls[t.photos[0]]
     ? `<img class="thumb" src="${esc(urls[t.photos[0]])}" alt="" loading="lazy">`
     : `<div class="thumb ph">${t.category === 'cleaning' ? ICONS.broom : ICONS.wrench}</div>`;
-  const status = t.is_done ? '<span class="chip done">Done</span>'
-    : (!t.is_active ? '<span class="chip">Paused</span>' : `<span class="chip ${due.cls}">${esc(due.label)}</span>`);
+  const status = statusChip(t);
   return `<div class="card" data-id="${t.id}">
     <div class="body" data-open="${t.id}" role="button" tabindex="0">
       ${thumb}
@@ -508,7 +513,6 @@ async function viewDetail(id, seq) {
   }
   const { data: hist } = await sb.from('completions').select('*').eq('task_id', id).order('completed_at', { ascending: false }).limit(5);
   const urls = await signedUrls(t.photos);
-  const due = relDue(t.due_date);
   const checked = JSON.parse(localStorage.getItem('items:' + id) || '[]');
 
   shell({
@@ -517,21 +521,24 @@ async function viewDetail(id, seq) {
       <a class="back" href="${isAdmin() ? '#/tasks' : '#/todo'}" id="d-back">${ICONS.back} Back</a>
       <h2 class="detail-title">${esc(t.title)}</h2>
       <div class="meta" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
-        ${t.is_done ? '<span class="chip done">Done</span>' : !t.is_active ? '<span class="chip">Paused</span>' : `<span class="chip ${due.cls}">${esc(due.label)}</span>`}
+        ${statusChip(t)}
         <span class="chip ${t.category}">${CAT_LABEL[t.category]}</span>
         <span class="chip">${KIND_LABEL[t.kind]}</span>
         ${t.priority === 'high' ? '<span class="chip high">High priority</span>' : ''}
       </div>
       ${!t.is_done && t.is_active ? `<div class="actions" style="margin-top:0"><button class="btn primary" id="d-done">${ICONS.check} Mark complete</button>
         ${isAdmin() ? `<a class="btn" href="#/task/${t.id}/edit">Edit</a>` : ''}</div>`
-        : isAdmin() ? `<div class="actions" style="margin-top:0"><a class="btn" href="#/task/${t.id}/edit">Edit</a>${t.is_done ? '<button class="btn" id="d-reopen">Reopen</button>' : ''}</div>` : ''}
+        : isAdmin() ? `<div class="actions" style="margin-top:0">
+            ${!t.is_done && !t.is_active ? `<button class="btn primary" id="d-activate">Activate</button>` : ''}
+            <a class="btn" href="#/task/${t.id}/edit">Edit</a>${t.is_done ? '<button class="btn" id="d-reopen">Reopen</button>' : ''}</div>` : ''}
+      ${!t.is_done && !t.is_active ? `<div class="notice">Inactive — this task isn’t on anyone’s to-do list.${isAdmin() ? ' Tap <b>Activate</b> when it’s needed.' : ''}</div>` : ''}
       ${t.photos.length ? `<div class="panel"><h3>Photos</h3><div class="gallery">${t.photos.map((p) => `<button data-full="${esc(urls[p])}"><img src="${esc(urls[p])}" alt="" loading="lazy"></button>`).join('')}</div></div>` : ''}
       ${t.description ? `<div class="panel"><h3>What to do</h3><p class="desc">${esc(t.description)}</p></div>` : ''}
       ${t.items.length ? `<div class="panel"><h3>Items needed</h3><ul class="items">${t.items.map((it, i) => `
         <li><label><input type="checkbox" data-item="${i}" ${checked.includes(i) ? 'checked' : ''}><span class="${checked.includes(i) ? 'got' : ''}">${esc(it.name)}</span></label>${it.qty ? `<span class="qty">${esc(it.qty)}</span>` : ''}</li>`).join('')}</ul></div>` : ''}
       <div class="panel"><h3>Details</h3><dl class="kv">
         <dt>${t.kind === 'routine' ? 'Repeats' : 'Type'}</dt><dd>${t.kind === 'routine' ? esc(repeatLabel(t)) : KIND_LABEL[t.kind]}</dd>
-        <dt>${t.kind === 'routine' ? 'Next due' : 'Planned for'}</dt><dd>${esc(fmtDate(t.due_date))}</dd>
+        <dt>${t.kind === 'routine' ? 'Next due' : 'Planned for'}</dt><dd>${t.due_date ? esc(fmtDate(t.due_date)) : 'Not set'}</dd>
         ${t.area ? `<dt>Where</dt><dd>${esc(t.area)}</dd>` : ''}
         <dt>Assigned to</dt><dd>${esc(personName(t.assigned_to))}</dd>
       </dl></div>
@@ -549,6 +556,21 @@ async function viewDetail(id, seq) {
   });
   const done = document.getElementById('d-done');
   if (done) done.onclick = () => openCompleteSheet(t);
+  const activate = document.getElementById('d-activate');
+  if (activate) activate.onclick = () => openSheet(`
+    <h2>Activate task</h2>
+    <p class="sub">${esc(t.title)} will appear on ${t.assigned_to ? esc(personName(t.assigned_to)) + '’s' : 'everyone’s'} to-do list from this date.</p>
+    <label class="field"><span>${t.kind === 'routine' ? 'Next due' : 'Planned date'}</span>
+      <input class="input" type="date" id="act-date" value="${esc(t.due_date && t.due_date > todayStr() ? t.due_date : todayStr())}"></label>
+    <button class="btn primary block" id="act-go">Activate</button>`, (s) => {
+    s.querySelector('#act-go').onclick = async (e) => {
+      const date = s.querySelector('#act-date').value || todayStr();
+      e.currentTarget.disabled = true;
+      const { error: e2 } = await sb.from('tasks').update({ is_active: true, due_date: date, updated_at: new Date().toISOString() }).eq('id', t.id);
+      if (e2) { e.currentTarget.disabled = false; return toast(friendlyError(e2)); }
+      closeSheet(); toast(date === todayStr() ? 'Activated — on the to-do list today' : `Activated for ${fmtDate(date)}`); render();
+    };
+  });
   const reopen = document.getElementById('d-reopen');
   if (reopen) reopen.onclick = async () => {
     const { error: e2 } = await sb.from('tasks').update({ is_done: false, due_date: todayStr(), updated_at: new Date().toISOString() }).eq('id', t.id);
@@ -572,7 +594,10 @@ async function viewTasks(seq) {
     const list = tasks.filter((t) =>
       (f.cat === 'all' || t.category === f.cat) &&
       (f.kind === 'all' || t.kind === f.kind) &&
-      (f.status === 'all' || (f.status === 'open' ? !t.is_done && t.is_active : (t.is_done || !t.is_active))) &&
+      (f.status === 'all'
+        || (f.status === 'open' && !t.is_done && t.is_active)
+        || (f.status === 'inactive' && !t.is_done && !t.is_active)
+        || (f.status === 'done' && t.is_done)) &&
       (!q || `${t.title} ${t.area} ${t.description}`.toLowerCase().includes(q)));
     const box = document.getElementById('task-list');
     box.innerHTML = list.length
@@ -586,7 +611,7 @@ async function viewTasks(seq) {
     title: 'All tasks', sub: `${tasks.filter((t) => !t.is_done && t.is_active).length} open`, nav: 'tasks',
     body: `
       <input class="input search" id="q" type="search" placeholder="Search tasks, rooms…" value="${esc(f.q)}">
-      <div class="filters">${chips('status', [['open', 'Open'], ['closed', 'Done / paused'], ['all', 'All']])}</div>
+      <div class="filters">${chips('status', [['open', 'Open'], ['inactive', 'Inactive'], ['done', 'Done'], ['all', 'All']])}</div>
       <div class="filters">${chips('cat', [['all', 'Any type'], ['cleaning', 'Cleaning'], ['maintenance', 'Maintenance']])}
         ${chips('kind', [['all', 'Any schedule'], ['routine', 'Routine'], ['adhoc', 'Ad hoc'], ['project', 'Projects']])}</div>
       <div class="list" id="task-list" style="margin-top:8px"></div>`,
@@ -645,7 +670,9 @@ async function viewEditor(id, seq) {
             ${['day', 'week', 'month', 'year'].map((u) => `<option value="${u}" ${t.repeat_unit === u ? 'selected' : ''}>${u}(s)</option>`).join('')}
           </select></label>
         </div>
-        <label class="field"><span id="due-label">First due</span><input class="input" name="due_date" type="date" required value="${esc(t.due_date)}"></label>
+        <label class="toggle" id="active-row"><span><b>Active</b><br><small style="color:var(--muted)" id="active-hint"></small></span>
+          <input type="checkbox" name="is_active" ${t.is_active ? 'checked' : ''}></label>
+        <label class="field" id="due-row"><span id="due-label">First due</span><input class="input" name="due_date" type="date" value="${esc(t.due_date || '')}"></label>
         <div class="row">
           <label class="field"><span>Assign to</span><select class="input" name="assigned_to">
             <option value="">Anyone</option>
@@ -658,7 +685,6 @@ async function viewEditor(id, seq) {
         <label class="field"><span>Where</span><input class="input" name="area" list="areas" placeholder="e.g. Kitchen, Garden, Main bedroom" value="${esc(t.area)}">
           <datalist id="areas">${areas.map((a) => `<option value="${esc(a)}">`).join('')}</datalist></label>
         <label class="field"><span>Description</span><textarea class="input" name="description" placeholder="Step by step, what good looks like, anything to watch out for">${esc(t.description)}</textarea></label>
-        ${id && t.kind === 'routine' ? `<label class="toggle"><span>Active (shows on to-do lists)</span><input type="checkbox" name="is_active" ${t.is_active ? 'checked' : ''}></label>` : ''}
       </div>
       <div class="panel">
         <h3>Items needed</h3>
@@ -684,15 +710,34 @@ async function viewEditor(id, seq) {
   });
   const hints = {
     routine: 'Repeats on a schedule. After it’s ticked off, it comes back automatically.',
-    adhoc: 'A one-off job. Shows on the to-do list from the planned date until it’s done.',
+    adhoc: 'A one-off job. Shows on the to-do list from the planned date until it’s done. Untick Active to keep it on file, with no date, until it’s needed.',
     project: 'An improvement or bigger job. Shows from the planned date until it’s marked done.',
   };
   function syncKind() {
     const k = segVal.kind;
     document.getElementById('repeat-row').hidden = k !== 'routine';
     document.getElementById('kind-hint').textContent = hints[k];
-    document.getElementById('due-label').textContent = k === 'routine' ? (id ? 'Next due' : 'First due') : 'Planned date';
+    const activeBox = form.querySelector('[name=is_active]');
+    // Ad hoc tasks can always be parked as inactive; routine tasks can be paused once they exist.
+    const showActive = k === 'adhoc' || (k === 'routine' && id && t.kind === 'routine');
+    document.getElementById('active-row').hidden = !showActive;
+    if (!showActive) activeBox.checked = true;
+    const inactive = !activeBox.checked;
+    document.getElementById('active-hint').textContent = inactive
+      ? 'Not on anyone’s to-do list. Activate it from the task when it’s needed.'
+      : 'Shows on the to-do list from the date below.';
+    const dueInput = form.querySelector('[name=due_date]');
+    const dateOptional = k === 'adhoc' && inactive;
+    dueInput.required = !dateOptional;
+    if (!dateOptional && !dueInput.value) dueInput.value = todayStr();
+    document.getElementById('due-label').textContent = k === 'routine'
+      ? (id ? 'Next due' : 'First due')
+      : dateOptional ? 'Planned date (optional)' : 'Planned date';
   }
+  form.querySelector('[name=is_active]').onchange = (e) => {
+    if (!e.target.checked && segVal.kind === 'adhoc') form.querySelector('[name=due_date]').value = '';
+    syncKind();
+  };
   syncKind();
 
   // Items
@@ -749,19 +794,16 @@ async function viewEditor(id, seq) {
       area: fd.get('area').trim(),
       priority: fd.get('priority'),
       assigned_to: fd.get('assigned_to') || null,
-      due_date: fd.get('due_date'),
       repeat_every: kind === 'routine' ? Math.max(1, parseInt(fd.get('repeat_every'), 10) || 1) : null,
       repeat_unit: kind === 'routine' ? fd.get('repeat_unit') : null,
       items: items.map((x) => ({ name: (x.name || '').trim(), qty: (x.qty || '').trim() })).filter((x) => x.name),
       photos: photos.map((p) => p.path),
       updated_at: new Date().toISOString(),
     };
-    if (kind === 'routine') {
-      row.is_done = false;
-      row.is_active = id && t.kind === 'routine' ? !!fd.get('is_active') : true;
-    } else {
-      row.is_active = true;
-    }
+    // The Active box is forced on (and hidden) wherever it doesn't apply, so it can be read as-is.
+    row.is_active = !!fd.get('is_active');
+    row.due_date = fd.get('due_date') || null;
+    if (kind === 'routine') row.is_done = false;
     if (!id) row.created_by = state.me.id;
     const btn = document.getElementById('save');
     btn.disabled = true;

@@ -99,6 +99,12 @@ create table if not exists public.tasks (
 
 create index if not exists tasks_assigned_due_idx on public.tasks (assigned_to, due_date);
 
+-- Inactive ad hoc tasks don't need a date (see migrations/002_inactive_adhoc.sql)
+alter table public.tasks alter column due_date drop not null;
+alter table public.tasks drop constraint if exists due_date_required_when_active;
+alter table public.tasks add constraint due_date_required_when_active
+  check (due_date is not null or (kind = 'adhoc' and not is_active));
+
 -- ---------- Completions (history) -------------------------------------
 create table if not exists public.completions (
   id            uuid primary key default gen_random_uuid(),
