@@ -102,6 +102,8 @@ const ICONS = {
   x: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
   camera: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
   image: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/></svg>',
+  up: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 15 6-6 6 6"/></svg>',
+  down: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>',
   back: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m15 5-7 7 7 7"/></svg>',
 };
 
@@ -492,6 +494,8 @@ function openCompleteSheet(task, tickBtn) {
         p_photos: photos.map((p) => p.path), p_today: todayStr(),
       });
       if (error) { e.currentTarget.disabled = false; return toast(friendlyError(error)); }
+      // Start the next round with a clean checklist
+      try { localStorage.removeItem('items:' + task.id); localStorage.removeItem('steps:' + task.id); } catch {}
       closeSheet();
       tickBtn?.classList.add('done');
       toast(task.kind === 'routine' ? `Done! Next due ${fmtDate(data.due_date)}` : 'Done!');
@@ -512,8 +516,12 @@ async function viewDetail(id, seq) {
     return;
   }
   const { data: hist } = await sb.from('completions').select('*').eq('task_id', id).order('completed_at', { ascending: false }).limit(5);
-  const urls = await signedUrls(t.photos);
-  const checked = JSON.parse(localStorage.getItem('items:' + id) || '[]');
+  const steps = t.steps || [];
+  const urls = await signedUrls([...t.photos, ...steps.flatMap((s) => s.photos || [])]);
+  const readSet = (key) => { try { return new Set(JSON.parse(localStorage.getItem(key) || '[]')); } catch { return new Set(); } };
+  const saveSet = (key, set) => { try { localStorage.setItem(key, JSON.stringify([...set])); } catch {} };
+  const checked = [...readSet('items:' + id)];
+  const stepsDone = readSet('steps:' + id);
 
   shell({
     title: CAT_LABEL[t.category], nav: '',
@@ -536,6 +544,14 @@ async function viewDetail(id, seq) {
       ${t.description ? `<div class="panel"><h3>What to do</h3><p class="desc">${esc(t.description)}</p></div>` : ''}
       ${t.items.length ? `<div class="panel"><h3>Items needed</h3><ul class="items">${t.items.map((it, i) => `
         <li><label><input type="checkbox" data-item="${i}" ${checked.includes(i) ? 'checked' : ''}><span class="${checked.includes(i) ? 'got' : ''}">${esc(it.name)}</span></label>${it.qty ? `<span class="qty">${esc(it.qty)}</span>` : ''}</li>`).join('')}</ul></div>` : ''}
+      ${steps.length ? `<div class="panel"><h3>Steps <span class="step-progress" id="step-progress"></span></h3><ol class="steps">${steps.map((s, i) => `
+        <li class="${stepsDone.has(i) ? 'done' : ''}">
+          <label class="step-check"><input type="checkbox" data-step="${i}" ${stepsDone.has(i) ? 'checked' : ''} aria-label="Step ${i + 1} done"><span class="step-num">${i + 1}</span></label>
+          <div class="step-body">
+            ${s.text ? `<p class="desc">${esc(s.text)}</p>` : ''}
+            ${(s.photos || []).length ? `<div class="gallery">${s.photos.map((p) => `<button data-full="${esc(urls[p])}"><img src="${esc(urls[p])}" alt="" loading="lazy"></button>`).join('')}</div>` : ''}
+          </div>
+        </li>`).join('')}</ol></div>` : ''}
       <div class="panel"><h3>Details</h3><dl class="kv">
         <dt>${t.kind === 'routine' ? 'Repeats' : 'Type'}</dt><dd>${t.kind === 'routine' ? esc(repeatLabel(t)) : KIND_LABEL[t.kind]}</dd>
         <dt>${t.kind === 'routine' ? 'Next due' : 'Planned for'}</dt><dd>${t.due_date ? esc(fmtDate(t.due_date)) : 'Not set'}</dd>
@@ -549,10 +565,19 @@ async function viewDetail(id, seq) {
   };
   $app.querySelectorAll('[data-full]').forEach((b) => b.onclick = () => openLightbox(b.dataset.full));
   $app.querySelectorAll('[data-item]').forEach((cb) => cb.onchange = () => {
-    const set = new Set(JSON.parse(localStorage.getItem('items:' + id) || '[]'));
+    const set = readSet('items:' + id);
     cb.checked ? set.add(+cb.dataset.item) : set.delete(+cb.dataset.item);
-    try { localStorage.setItem('items:' + id, JSON.stringify([...set])); } catch {}
+    saveSet('items:' + id, set);
     cb.nextElementSibling.classList.toggle('got', cb.checked);
+  });
+  const progress = document.getElementById('step-progress');
+  const drawProgress = () => { if (progress) progress.textContent = `· ${stepsDone.size} of ${steps.length} done`; };
+  drawProgress();
+  $app.querySelectorAll('[data-step]').forEach((cb) => cb.onchange = () => {
+    cb.checked ? stepsDone.add(+cb.dataset.step) : stepsDone.delete(+cb.dataset.step);
+    saveSet('steps:' + id, stepsDone);
+    cb.closest('li').classList.toggle('done', cb.checked);
+    drawProgress();
   });
   const done = document.getElementById('d-done');
   if (done) done.onclick = () => openCompleteSheet(t);
@@ -643,9 +668,10 @@ async function viewEditor(id, seq) {
   await loadPeople(); // always offer the current list of people to assign to
   if (seq !== renderSeq) return;
   const items = t.items.map((x) => ({ ...x }));
-  const photos = t.photos.map((p) => ({ path: p, preview: null }));
-  const urls = await signedUrls(t.photos);
-  photos.forEach((p) => { p.preview = urls[p.path]; });
+  const tSteps = t.steps || [];
+  const urls = await signedUrls([...t.photos, ...tSteps.flatMap((s) => s.photos || [])]);
+  const photos = t.photos.map((p) => ({ path: p, preview: urls[p] }));
+  const steps = tSteps.map((s) => ({ text: s.text || '', photos: (s.photos || []).map((p) => ({ path: p, preview: urls[p] })) }));
   const removed = [];
   const active = state.people.filter((p) => p.role === 'admin' || p.role === 'member');
   const areas = [...new Set((await sb.from('tasks').select('area')).data?.map((x) => x.area).filter(Boolean) || [])].sort();
@@ -684,12 +710,17 @@ async function viewEditor(id, seq) {
         </div>
         <label class="field"><span>Where</span><input class="input" name="area" list="areas" placeholder="e.g. Kitchen, Garden, Main bedroom" value="${esc(t.area)}">
           <datalist id="areas">${areas.map((a) => `<option value="${esc(a)}">`).join('')}</datalist></label>
-        <label class="field"><span>Description</span><textarea class="input" name="description" placeholder="Step by step, what good looks like, anything to watch out for">${esc(t.description)}</textarea></label>
+        <label class="field"><span>Description</span><textarea class="input" name="description" placeholder="Overview, what good looks like, anything to watch out for">${esc(t.description)}</textarea></label>
       </div>
       <div class="panel">
         <h3>Items needed</h3>
         <div id="ed-items"></div>
         <button type="button" class="btn sm" id="add-item">${ICONS.plus.replace('<svg', '<svg width="16" height="16"')} Add item</button>
+      </div>
+      <div class="panel">
+        <h3>Steps</h3>
+        <div id="ed-steps"></div>
+        <button type="button" class="btn sm" id="add-step">${ICONS.plus.replace('<svg', '<svg width="16" height="16"')} Add step</button>
       </div>
       <div class="sticky-save">
         ${id ? `<button type="button" class="btn danger" id="del" style="flex:0 0 auto">${ICONS.trash.replace('<svg', '<svg width="20" height="20"')}</button>` : ''}
@@ -768,22 +799,76 @@ async function viewEditor(id, seq) {
     });
   };
   drawPhotos();
-  form.querySelectorAll('input[type=file]').forEach((inp) => inp.onchange = async () => {
-    const files = [...inp.files]; inp.value = '';
+  // Upload picked files into a photo list, redrawing as each one finishes.
+  const addPhotos = async (files, list, redraw) => {
     for (const file of files) {
       const entry = { preview: URL.createObjectURL(file), path: null };
-      photos.push(entry); drawPhotos();
+      list.push(entry); redraw();
       try { entry.path = await uploadPhoto(file, 'tasks'); }
-      catch (e) { photos.splice(photos.indexOf(entry), 1); toast(friendlyError(e)); }
-      drawPhotos();
+      catch (e) { list.splice(list.indexOf(entry), 1); toast(friendlyError(e)); }
+      redraw();
     }
+  };
+  ['#ed-cam', '#ed-lib'].forEach((sel) => {
+    const inp = form.querySelector(sel);
+    inp.onchange = () => { const files = [...inp.files]; inp.value = ''; addPhotos(files, photos, drawPhotos); };
   });
+
+  // Steps — each with its own text and optional photos
+  const stepsBox = document.getElementById('ed-steps');
+  const drawSteps = () => {
+    stepsBox.innerHTML = steps.map((s, i) => `<div class="step-ed">
+      <div class="step-head">
+        <span class="step-num">${i + 1}</span>
+        <textarea class="input" data-st="${i}" rows="2" placeholder="What to do in this step">${esc(s.text)}</textarea>
+        <div class="step-tools">
+          <button type="button" class="icon-btn sm" data-mv="${i}:-1" aria-label="Move step up" ${i === 0 ? 'disabled' : ''}>${ICONS.up}</button>
+          <button type="button" class="icon-btn sm" data-mv="${i}:1" aria-label="Move step down" ${i === steps.length - 1 ? 'disabled' : ''}>${ICONS.down}</button>
+          <button type="button" class="icon-btn sm" data-rms="${i}" aria-label="Remove step">${ICONS.x}</button>
+        </div>
+      </div>
+      ${s.photos.length ? `<div class="photo-grid">${s.photos.map((p, j) => `<div class="ph ${p.path ? '' : 'uploading'}"><img src="${esc(p.preview || '')}" alt=""><button type="button" data-rmsp="${i}:${j}" aria-label="Remove photo">${ICONS.x}</button></div>`).join('')}</div>` : ''}
+      <div class="step-photo-btns">
+        <label class="btn sm" for="st${i}-cam">${ICONS.camera} Photo<input id="st${i}-cam" data-sf="${i}" type="file" accept="image/*" capture="environment"></label>
+        <label class="btn sm" for="st${i}-lib">${ICONS.image} Choose<input id="st${i}-lib" data-sf="${i}" type="file" accept="image/*" multiple></label>
+      </div>
+    </div>`).join('')
+      || '<p class="hint" style="margin:0 0 10px">Break the job into steps, with a photo for any step that needs showing.</p>';
+    stepsBox.querySelectorAll('[data-st]').forEach((ta) => ta.oninput = () => { steps[+ta.dataset.st].text = ta.value; });
+    stepsBox.querySelectorAll('[data-mv]').forEach((b) => b.onclick = () => {
+      const [i, d] = b.dataset.mv.split(':').map(Number);
+      [steps[i], steps[i + d]] = [steps[i + d], steps[i]];
+      drawSteps();
+    });
+    stepsBox.querySelectorAll('[data-rms]').forEach((b) => b.onclick = () => {
+      const [s] = steps.splice(+b.dataset.rms, 1);
+      s.photos.forEach((p) => p.path && removed.push(p.path));
+      drawSteps();
+    });
+    stepsBox.querySelectorAll('[data-rmsp]').forEach((b) => b.onclick = () => {
+      const [i, j] = b.dataset.rmsp.split(':').map(Number);
+      const [p] = steps[i].photos.splice(j, 1);
+      if (p.path) removed.push(p.path);
+      drawSteps();
+    });
+    stepsBox.querySelectorAll('[data-sf]').forEach((inp) => inp.onchange = () => {
+      const files = [...inp.files]; inp.value = '';
+      addPhotos(files, steps[+inp.dataset.sf].photos, drawSteps);
+    });
+  };
+  drawSteps();
+  document.getElementById('add-step').onclick = () => {
+    steps.push({ text: '', photos: [] }); drawSteps();
+    stepsBox.querySelector(`[data-st="${steps.length - 1}"]`).focus();
+  };
 
   // Save
   form.onsubmit = async (e) => {
     e.preventDefault();
     if (!form.reportValidity()) return;
-    if (photos.some((p) => !p.path)) return toast('Wait for photos to finish uploading');
+    if (photos.some((p) => !p.path) || steps.some((s) => s.photos.some((p) => !p.path))) {
+      return toast('Wait for photos to finish uploading');
+    }
     const fd = new FormData(form);
     const kind = segVal.kind;
     const row = {
@@ -798,6 +883,9 @@ async function viewEditor(id, seq) {
       repeat_unit: kind === 'routine' ? fd.get('repeat_unit') : null,
       items: items.map((x) => ({ name: (x.name || '').trim(), qty: (x.qty || '').trim() })).filter((x) => x.name),
       photos: photos.map((p) => p.path),
+      steps: steps
+        .map((s) => ({ text: s.text.trim(), photos: s.photos.map((p) => p.path) }))
+        .filter((s) => s.text || s.photos.length),
       updated_at: new Date().toISOString(),
     };
     // The Active box is forced on (and hidden) wherever it doesn't apply, so it can be read as-is.
@@ -823,7 +911,8 @@ async function viewEditor(id, seq) {
     s.querySelector('#yes').onclick = async () => {
       const { error } = await sb.from('tasks').delete().eq('id', id);
       if (error) return toast(friendlyError(error));
-      if (t.photos.length) await sb.storage.from(BUCKET).remove(t.photos);
+      const allPhotos = [...t.photos, ...(t.steps || []).flatMap((s) => s.photos || [])];
+      if (allPhotos.length) await sb.storage.from(BUCKET).remove(allPhotos);
       closeSheet(); toast('Deleted'); location.hash = '#/tasks';
     };
   });
