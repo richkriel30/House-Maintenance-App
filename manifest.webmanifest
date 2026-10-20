@@ -1,0 +1,9 @@
+{
+  "name": "House Tasks",
+  "short_name": "House Tasks",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f6f2ea",
+  "theme_color": "#1f4d3a",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}
