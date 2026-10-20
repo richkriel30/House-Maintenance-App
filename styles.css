@@ -300,6 +300,16 @@ main { max-width: 720px; margin: 0 auto; padding: 0 16px calc(var(--nav-h) + 32p
 /* ---------- People / history ---------- */
 .person { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
 .person:last-child { border-bottom: 0; }
+.person { flex-wrap: wrap; }
+.days { flex-basis: 100%; display: flex; align-items: center; gap: 4px; margin-top: 2px; }
+.days-label { font-size: 13px; font-weight: 700; color: var(--muted); width: 50px; flex: none; }
+.person .who small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.day {
+  width: 32px; height: 32px; flex: none; border-radius: 50%; border: 1.5px solid var(--line);
+  background: var(--surface); color: var(--muted); font-weight: 800; font-size: 12px; cursor: pointer; padding: 0;
+}
+.day.on { background: var(--primary); border-color: var(--primary); color: var(--primary-ink); }
+.day:disabled { opacity: .6; }
 .person .who { flex: 1; min-width: 0; }
 .person .who b { display: block; overflow-wrap: anywhere; }
 .person .who small { color: var(--muted); overflow-wrap: anywhere; }

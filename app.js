@@ -66,11 +66,18 @@ const initials = (p) => ((p?.full_name || p?.email || '?').trim().split(/\s+/).m
 const KIND_LABEL = { routine: 'Routine', adhoc: 'Ad hoc', project: 'Project' };
 const CAT_LABEL = { cleaning: 'Cleaning', maintenance: 'Maintenance' };
 const UNIT_LABEL = { day: 'day', week: 'week', month: 'month', year: 'year' };
+// Working days are ISO weekdays: 1 = Monday … 7 = Sunday. Null/empty/all seven = every day.
+const DAY_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const hasWorkDays = (days) => Array.isArray(days) && days.length > 0 && days.length < 7;
+const workDaysLabel = (days) => hasWorkDays(days) ? [...days].sort().map((d) => DAY_SHORT[d - 1]).join(', ') : 'Every day';
+const personDays = (id) => state.people.find((p) => p.id === id)?.work_days;
+
 function repeatLabel(t) {
   if (t.kind !== 'routine') return '';
   const n = t.repeat_every, u = UNIT_LABEL[t.repeat_unit];
-  if (n === 1) return { day: 'Daily', week: 'Weekly', month: 'Monthly', year: 'Yearly' }[t.repeat_unit];
-  return `Every ${n} ${u}s`;
+  const base = n === 1 ? { day: 'Daily', week: 'Weekly', month: 'Monthly', year: 'Yearly' }[t.repeat_unit] : `Every ${n} ${u}s`;
+  const days = t.repeat_unit === 'day' && t.assigned_to ? personDays(t.assigned_to) : null;
+  return hasWorkDays(days) ? `${base} (${workDaysLabel(days)})` : base;
 }
 
 function toast(msg, ms = 2600) {
@@ -708,6 +715,7 @@ async function viewEditor(id, seq) {
             ${['low', 'normal', 'high'].map((p) => `<option value="${p}" ${t.priority === p ? 'selected' : ''}>${p[0].toUpperCase() + p.slice(1)}</option>`).join('')}
           </select></label>
         </div>
+        <p class="hint" id="days-hint" hidden></p>
         <label class="field"><span>Where</span><input class="input" name="area" list="areas" placeholder="e.g. Kitchen, Garden, Main bedroom" value="${esc(t.area)}">
           <datalist id="areas">${areas.map((a) => `<option value="${esc(a)}">`).join('')}</datalist></label>
         <label class="field"><span>Description</span><textarea class="input" name="description" placeholder="Overview, what good looks like, anything to watch out for">${esc(t.description)}</textarea></label>
@@ -769,6 +777,19 @@ async function viewEditor(id, seq) {
     if (!e.target.checked && segVal.kind === 'adhoc') form.querySelector('[name=due_date]').value = '';
     syncKind();
   };
+  // Tell the admin when a daily task will follow someone's working days
+  const syncDaysHint = () => {
+    const who = form.querySelector('[name=assigned_to]').value;
+    const days = who ? personDays(who) : null;
+    const daily = segVal.kind === 'routine' && form.querySelector('[name=repeat_unit]').value === 'day';
+    const hint = document.getElementById('days-hint');
+    hint.hidden = !(daily && hasWorkDays(days));
+    if (!hint.hidden) hint.textContent = `${personName(who)} works ${workDaysLabel(days)} — this task will only come up on those days.`;
+  };
+  form.querySelector('[name=assigned_to]').addEventListener('change', syncDaysHint);
+  form.querySelector('[name=repeat_unit]').addEventListener('change', syncDaysHint);
+  form.querySelectorAll('[data-seg=kind] button').forEach((b) => b.addEventListener('click', syncDaysHint));
+  syncDaysHint();
   syncKind();
 
   // Items
@@ -936,6 +957,13 @@ async function viewPeople(seq) {
       : `<select class="input" data-role="${p.id}">
           ${[['member', 'Member'], ['admin', 'Admin'], ['disabled', 'Switched off']].map(([v, l]) => `<option value="${v}" ${p.role === v ? 'selected' : ''}>${l}</option>`).join('')}
         </select>`}
+    ${p.role === 'admin' || p.role === 'member' ? `<div class="days">
+      <span class="days-label">Works</span>
+      ${DAY_SHORT.map((d, i) => {
+        const on = !hasWorkDays(p.work_days) || p.work_days.includes(i + 1);
+        return `<button class="day ${on ? 'on' : ''}" data-day="${p.id}:${i + 1}" aria-pressed="${on}" aria-label="${d}">${d.slice(0, 2)}</button>`;
+      }).join('')}
+    </div>` : ''}
   </div>`;
   shell({
     title: 'People', sub: `${people.filter((p) => p.role === 'admin' || p.role === 'member').length} active`, nav: 'people',
@@ -946,7 +974,8 @@ async function viewPeople(seq) {
       </div>
       ${pending.length ? `<div class="section-h"><h2>Waiting for approval</h2><span class="count">${pending.length}</span></div>` : ''}
       <div class="panel">${people.map(row).join('')}</div>
-      <p class="hint" style="margin-top:4px">Members see tasks assigned to them or to “Anyone”. Admins see everything and can add, edit and assign tasks.</p>`,
+      <p class="hint" style="margin-top:4px">Members see tasks assigned to them or to “Anyone”. Admins see everything and can add, edit and assign tasks.</p>
+      <p class="hint">Tap the days under a person to set when they work. Daily tasks assigned to them will only come up on those days — e.g. done on Monday, the next one moves to their next working day.</p>`,
   });
   document.getElementById('copy').onclick = async () => {
     try { await navigator.clipboard.writeText(document.getElementById('link').value); toast('Link copied'); }
@@ -960,6 +989,24 @@ async function viewPeople(seq) {
   };
   $app.querySelectorAll('[data-approve]').forEach((b) => b.onclick = () => setRole(b.dataset.approve, 'member'));
   $app.querySelectorAll('[data-role]').forEach((s) => s.onchange = () => setRole(s.dataset.role, s.value));
+  $app.querySelectorAll('[data-day]').forEach((b) => b.onclick = async () => {
+    const [uid, day] = b.dataset.day.split(':');
+    const p = state.people.find((x) => x.id === uid);
+    const current = new Set(hasWorkDays(p.work_days) ? p.work_days : [1, 2, 3, 4, 5, 6, 7]);
+    current.has(+day) ? current.delete(+day) : current.add(+day);
+    if (!current.size) return toast('Pick at least one day');
+    const work_days = current.size === 7 ? null : [...current].sort();
+    b.disabled = true;
+    const { error } = await sb.from('profiles').update({ work_days }).eq('id', uid);
+    b.disabled = false;
+    if (error) return toast(friendlyError(error));
+    p.work_days = work_days;
+    $app.querySelectorAll(`[data-day^="${uid}:"]`).forEach((x) => {
+      const on = !work_days || work_days.includes(+x.dataset.day.split(':')[1]);
+      x.classList.toggle('on', on); x.setAttribute('aria-pressed', on);
+    });
+    toast(`${p.full_name || p.email}: ${workDaysLabel(work_days)}`);
+  });
 }
 
 // ======================================================================
