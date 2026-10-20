@@ -197,6 +197,7 @@ const routes = [
 ];
 
 let renderSeq = 0;
+let peopleLoadedAsActive = false;
 let cameFromApp = false; // true once the user has navigated inside the app (so Back can use history)
 window.addEventListener('hashchange', () => { cameFromApp = true; }, { capture: true });
 async function render() {
@@ -206,8 +207,15 @@ async function render() {
   if (!state.session || state.authMode === 'recovery') return viewAuth();
   if (!state.me) {
     try { await loadMe(); } catch (e) { return viewFatal(e); }
+    peopleLoadedAsActive = false;
   }
   if (!state.me || state.me.role === 'pending' || state.me.role === 'disabled') return viewPending();
+  // While pending, the database only shows a person their own profile. Once active,
+  // fetch everyone again so names and the "Assign to" list are complete.
+  if (!peopleLoadedAsActive) {
+    await loadPeople();
+    peopleLoadedAsActive = true;
+  }
 
   const hash = location.hash || '#/todo';
   for (const [re, fn, adminOnly] of routes) {
@@ -607,6 +615,7 @@ async function viewEditor(id, seq) {
     if (!data) { location.hash = '#/tasks'; return; }
     t = data;
   }
+  await loadPeople(); // always offer the current list of people to assign to
   if (seq !== renderSeq) return;
   const items = t.items.map((x) => ({ ...x }));
   const photos = t.photos.map((p) => ({ path: p, preview: null }));
